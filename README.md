@@ -376,6 +376,7 @@ See the issue tracker for the current priority list and good-first-issue labels.
 ## Documentation
 
 - [Architecture](docs/ARCHITECTURE.md)
+- [Downloads](docs/DOWNLOADS.md)
 - [Contributing](docs/CONTRIBUTING.md)
 - [Debugging](docs/DEBUGGING.md)
 - [Mobile](docs/MOBILE.md)

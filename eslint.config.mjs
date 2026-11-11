@@ -13,6 +13,12 @@ const eslintConfig = defineConfig([
     "build/**",
     "public/**",
     "next-env.d.ts",
+    // Generated / native / packaged artifacts
+    "android/**",
+    "debug/**",
+    "dist-desktop/**",
+    "src-tauri/target/**",
+    "scripts/**",
   ]),
 ]);
 

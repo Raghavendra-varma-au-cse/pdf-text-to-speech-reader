@@ -4,6 +4,7 @@ import { useEffect, useRef } from 'react';
 import DOMPurify from 'dompurify';
 import { useAudioStore } from '../store/use-audio-store';
 import type { TextSegment } from '../types';
+import { ZoomInIcon, ZoomOutIcon } from './Icons';
 
 interface FormattedDocumentViewerProps {
   html: string;
@@ -73,12 +74,58 @@ export const FormattedDocumentViewer = ({ html, segments }: FormattedDocumentVie
   const autoScroll = useAudioStore((state) => state.autoScroll);
   const playSegment = useAudioStore((state) => state.playSegment);
   const textFontSize = useAudioStore((state) => state.textFontSize);
+  const increaseFontSize = useAudioStore((state) => state.increaseFontSize);
+  const decreaseFontSize = useAudioStore((state) => state.decreaseFontSize);
+  const resetFontSize = useAudioStore((state) => state.resetFontSize);
+  const setSelectionSegmentIndex = useAudioStore((state) => state.setSelectionSegmentIndex);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    let frame = 0;
+    const handleSelection = () => {
+      if (frame) return;
+      frame = window.requestAnimationFrame(() => {
+        frame = 0;
+        const selection = document.getSelection();
+        if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+          setSelectionSegmentIndex(null);
+          return;
+        }
+        const anchor = selection.getRangeAt(0).startContainer;
+        const element =
+          anchor.nodeType === Node.ELEMENT_NODE ? (anchor as HTMLElement) : anchor.parentElement;
+        if (!element || !container.contains(element)) {
+          setSelectionSegmentIndex(null);
+          return;
+        }
+        const sentence = element.closest<HTMLElement>('[data-segment-index]');
+        const index = sentence ? Number(sentence.dataset.segmentIndex) : -1;
+        setSelectionSegmentIndex(Number.isInteger(index) && index >= 0 ? index : null);
+      });
+    };
+
+    document.addEventListener('selectionchange', handleSelection);
+    return () => {
+      document.removeEventListener('selectionchange', handleSelection);
+      if (frame) window.cancelAnimationFrame(frame);
+    };
+  }, [setSelectionSegmentIndex]);
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
     container.innerHTML = DOMPurify.sanitize(html, { USE_PROFILES: { html: true } });
+    // Privacy: imported Markdown/DOCX must not phone home for remote images.
+    container.querySelectorAll('img').forEach((image) => {
+      const src = image.getAttribute('src') ?? '';
+      if (!src.startsWith('data:') && !src.startsWith('blob:')) {
+        image.removeAttribute('src');
+        image.setAttribute('alt', image.getAttribute('alt') || 'Remote image blocked');
+      }
+    });
     container.querySelectorAll('a').forEach((link) => {
       link.setAttribute('target', '_blank');
       link.setAttribute('rel', 'noopener noreferrer');
@@ -103,7 +150,7 @@ export const FormattedDocumentViewer = ({ html, segments }: FormattedDocumentVie
     const handleClick = (event: MouseEvent) => {
       const target = event.target as HTMLElement;
       const sentence = target.closest<HTMLElement>('[data-segment-index]');
-      if (sentence) playSegment(Number(sentence.dataset.segmentIndex));
+      if (sentence) playSegment(Number(sentence.dataset.segmentIndex), { stopAfter: event.shiftKey });
     };
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key !== 'Enter' && event.key !== ' ') return;
@@ -137,11 +184,52 @@ export const FormattedDocumentViewer = ({ html, segments }: FormattedDocumentVie
   }, [currentSegmentIndex, playbackStatus, autoScroll, html, segments]);
 
   return (
-    <article
-      ref={containerRef}
-      className="formatted-document w-full mx-auto bg-surface border border-border rounded-2xl md:rounded-3xl p-6 sm:p-10 md:p-12 text-foreground shadow-md"
-      style={{ fontSize: `${textFontSize}px` }}
-      aria-label="Formatted document reader content"
-    />
+    <div className="mx-auto w-full max-w-3xl">
+      <div className="mb-3 flex items-center justify-between gap-2 px-1 sm:hidden">
+        <span className="text-xs font-semibold text-muted">Reading size</span>
+        <div
+          className="flex items-center overflow-hidden rounded-xl border border-navbar-control-border bg-navbar-control"
+          role="group"
+          aria-label="Text reader font size controls"
+        >
+          <button
+            type="button"
+            className="flex h-9 w-9 items-center justify-center border-0 bg-transparent text-foreground transition-colors hover:bg-navbar-control-hover hover:text-primary disabled:opacity-40 cursor-pointer"
+            title="Decrease font size"
+            aria-label="Decrease font size"
+            disabled={textFontSize <= 12}
+            onClick={decreaseFontSize}
+          >
+            <ZoomOutIcon size={15} />
+          </button>
+          <button
+            type="button"
+            className="h-9 border-x border-navbar-control-border bg-transparent px-2.5 font-mono text-xs font-semibold text-foreground transition-colors hover:text-primary cursor-pointer"
+            title="Reset font size to default (16px)"
+            aria-label={`Reset font size, currently ${textFontSize} pixels`}
+            onClick={resetFontSize}
+          >
+            {textFontSize}px
+          </button>
+          <button
+            type="button"
+            className="flex h-9 w-9 items-center justify-center border-0 bg-transparent text-foreground transition-colors hover:bg-navbar-control-hover hover:text-primary disabled:opacity-40 cursor-pointer"
+            title="Increase font size"
+            aria-label="Increase font size"
+            disabled={textFontSize >= 32}
+            onClick={increaseFontSize}
+          >
+            <ZoomInIcon size={15} />
+          </button>
+        </div>
+      </div>
+
+      <article
+        ref={containerRef}
+        className="formatted-document w-full bg-surface border border-border rounded-2xl md:rounded-3xl p-5 sm:p-10 md:p-12 text-foreground shadow-md"
+        style={{ fontSize: `${textFontSize}px` }}
+        aria-label="Formatted document reader content"
+      />
+    </div>
   );
 };

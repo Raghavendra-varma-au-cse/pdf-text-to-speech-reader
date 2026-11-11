@@ -315,9 +315,46 @@
   position: absolute;
   top: 0;
   left: 0;
+  inset: 0;
   pointer-events: auto;
   z-index: 10;
   opacity: 1 !important;
+}
+
+/* Placeholder shown until the page scrolls near the viewport. It keeps the
+   document height stable without allocating a canvas for every page. */
+.pdf-page {
+  contain: layout style;
+}
+
+.pdf-page-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #ffffff;
+  color: #cbd5e1;
+  font: 500 12px/1 var(--font-mono), monospace;
+  letter-spacing: 0.08em;
+  user-select: none;
+}
+
+.pdf-page.is-rendering .pdf-page-placeholder::after {
+  content: '';
+  width: 18px;
+  height: 18px;
+  margin-left: 10px;
+  border-radius: 999px;
+  border: 2px solid color-mix(in srgb, var(--color-primary) 25%, transparent);
+  border-top-color: var(--color-primary);
+  animation: spin-slow 0.8s linear infinite;
+}
+
+.pdf-canvas {
+  position: relative;
+  z-index: 0;
+  display: block;
 }
 
 .pdf-textLayer-inner {
@@ -688,6 +725,8 @@ nr-sentence.playing,
   border-radius: 3px;
   cursor: pointer;
   transition: background-color 120ms ease;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
 
 .formatted-document .document-segment:hover {
@@ -695,5 +734,87 @@ nr-sentence.playing,
 }
 
 .formatted-document .document-segment.playing {
-  background: var(--highlight-hover);
+  background: var(--highlight-bg);
+  color: var(--highlight-text);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--highlight-border) 35%, transparent);
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+.formatted-document .document-segment:focus-visible,
+nr-sentence:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 1px;
+  border-radius: 3px;
+}
+
+/* ────────────────────────────────────────────────────────
+   Player scrubber: a comfortable thumb on touch screens.
+   The native accent colour is kept for the filled track.
+   ──────────────────────────────────────────────────────── */
+.player-scrubber {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+}
+
+.player-scrubber::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-border) 75%, transparent);
+}
+
+.player-scrubber::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--color-primary);
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.3);
+}
+
+.player-scrubber::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-border) 75%, transparent);
+}
+
+.player-scrubber::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--color-primary);
+}
+
+/* ────────────────────────────────────────────────────────
+   Mobile PDF page area. PdfViewer computes the page width from
+   its container; removing the extra wrapper padding keeps the
+   page inside the page-level gutter instead of forcing a
+   horizontal scrollbar on phones.
+   ──────────────────────────────────────────────────────── */
+@media (max-width: 640px) {
+  .pdf-pages {
+    padding-inline: 0;
+  }
+
+  .pdf-page {
+    max-width: 100%;
+    border-radius: 0.75rem;
+  }
+}
+
+.safe-top {
+  padding-top: max(16px, env(safe-area-inset-top));
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .document-segment,
+  .player-scrubber,
+  .formatted-document .document-segment {
+    transition: none;
+  }
 }

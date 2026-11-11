@@ -3,7 +3,12 @@
   "short_name": "ReadAloud",
   "description": "ReadAloud: free PDF & text to speech reader for PDF, DOCX, TXT and Markdown with synchronized sentence highlighting.",
   "start_url": "./",
+  "scope": "./",
   "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "any",
+  "lang": "en",
+  "categories": ["productivity", "education", "utilities"],
   "background_color": "#071311",
   "theme_color": "#0d9488",
   "icons": [

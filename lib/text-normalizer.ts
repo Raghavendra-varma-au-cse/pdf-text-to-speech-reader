@@ -1,5 +1,13 @@
 import type { TextSegment } from '../types';
 
+/** Stable unique id that also works outside secure contexts (plain http/LAN). */
+function makeId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `seg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 const ABBREVIATIONS = new Set([
   'mr', 'mrs', 'ms', 'dr', 'prof', 'sr', 'jr', 'rev', 'hon', 'st',
   'vs', 'etc', 'eg', 'ie', 'cf', 'ca', 'approx', 'al',
@@ -111,8 +119,9 @@ export function normalizeText(
   pageIndex: number
 ): TextSegment[] {
   const fullTextChars: string[] = [];
-  const charToSpanMap: { spanId: string }[] = [];
-  const spanTextMap: Map<string, string[]> = new Map();
+  // A parallel array of span ids keeps one small string per character instead
+  // of one object per character. On long books this is a large memory win.
+  const charToSpanMap: (string | undefined)[] = [];
 
   textItems.forEach((item, idx) => {
     const textItem = item as { str?: string; hasEOL?: boolean } | null;
@@ -121,12 +130,12 @@ export function normalizeText(
 
     const spanId = `page-${pageIndex}-span-${idx}`;
 
-    for (const ch of raw) {
-      fullTextChars.push(ch);
-      charToSpanMap.push({ spanId });
-      const bucket = spanTextMap.get(spanId) ?? [];
-      bucket.push(ch);
-      spanTextMap.set(spanId, bucket);
+    // Iterate by UTF-16 code unit, not by code point: every offset below is
+    // used with String#slice, which counts code units. Using `for..of` here
+    // desynchronises offsets for emoji / astral-plane characters.
+    for (let ci = 0; ci < raw.length; ci++) {
+      fullTextChars.push(raw[ci]);
+      charToSpanMap.push(spanId);
     }
 
     // Add a space separator when the PDF item doesn't already end with
@@ -137,10 +146,10 @@ export function normalizeText(
 
     if (textItem?.hasEOL) {
       fullTextChars.push('\n');
-      charToSpanMap.push({ spanId: 'EOL' });
+      charToSpanMap.push(undefined);
     } else if (!endsWithWhitespace && !endsWithHyphen) {
       fullTextChars.push(' ');
-      charToSpanMap.push({ spanId: 'SPACE' });
+      charToSpanMap.push(undefined);
     }
   });
 
@@ -155,10 +164,13 @@ export function normalizeText(
     const rawSegment = text.slice(segStart, endExclusive);
 
     // Remove hyphenation that occurs at line breaks / span boundaries.
-    // This removes a hyphen followed by any whitespace/newline so that
-    // "re-\nports" or "re- ports" becomes "reports". We then
-    // collapse other whitespace into single spaces.
-    const segmentText = rawSegment.replace(/-\s+/g, '').replace(/\s+/g, ' ').trim();
+    // Only join when the hyphen is glued to a preceding letter, so that
+    // mathematical subtraction ("x - y") and dash-separated phrases survive.
+    // Then collapse other whitespace into single spaces.
+    const segmentText = rawSegment
+      .replace(/([A-Za-z])-\s+(?=[a-z])/g, '$1')
+      .replace(/\s+/g, ' ')
+      .trim();
     if (!segmentText) {
       segStart = endExclusive;
       return;
@@ -173,14 +185,13 @@ export function normalizeText(
     for (let i = segStart; i < endExclusive; i++) {
       const mapped = charToSpanMap[i];
       if (!mapped) continue;
-      if (mapped.spanId === 'SPACE' || mapped.spanId === 'EOL') continue;
-      spanIds.add(mapped.spanId);
+      spanIds.add(mapped);
 
-      if (mapped.spanId !== currentSpan) {
+      if (mapped !== currentSpan) {
         if (buffer && currentSpan) {
           spanFragments.push({ spanId: currentSpan, text: buffer });
         }
-        currentSpan = mapped.spanId;
+        currentSpan = mapped;
         buffer = '';
       }
 
@@ -192,7 +203,7 @@ export function normalizeText(
     }
 
     segments.push({
-      id: crypto.randomUUID(),
+      id: makeId(),
       text: segmentText,
       pageNumber: pageIndex,
       spanIds: Array.from(spanIds),
@@ -212,7 +223,9 @@ export function normalizeText(
     else if (ch === '[') bracketDepth++;
     else if (ch === ']') bracketDepth = Math.max(0, bracketDepth - 1);
 
-    let isSentenceEnd = /[.!:?]/.test(ch);
+    // Colon is intentionally not a sentence boundary: "The stages are: one,
+    // two" is spoken as one sentence, matching normalizeRawText.
+    let isSentenceEnd = /[.!?]/.test(ch);
 
     if (isSentenceEnd && ch === '.') {
       isSentenceEnd = isSentenceEndPeriod(fullTextChars, i, parenDepth, bracketDepth);
@@ -238,7 +251,7 @@ export function normalizeText(
  * Helper to split a single text line into sentences using punctuation boundaries.
  */
 function splitLineIntoSentences(line: string): string[] {
-  const chars = [...line];
+  const chars = line.split(''); // UTF-16 code units, matching slice()
   const sentences: string[] = [];
   let start = 0;
 
@@ -283,7 +296,7 @@ function splitLineIntoSentences(line: string): string[] {
  * Normalise a raw text string (pasted or typed) into sentence segments,
  * preserving paragraphs, line breaks, and natural document organization.
  */
-export function normalizeRawText(text: string): TextSegment[] {
+export function normalizeRawText(text: string, pageNumber = 1): TextSegment[] {
   if (!text || !text.trim()) return [];
 
   const normalized = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
@@ -316,9 +329,9 @@ export function normalizeRawText(text: string): TextSegment[] {
         }
 
         segments.push({
-          id: crypto.randomUUID(),
+          id: makeId(),
           text: segText,
-          pageNumber: 1,
+          pageNumber,
           spanIds: [],
           paragraphIndex: paraIdx,
           trailingNewlines,

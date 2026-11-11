@@ -1,0 +1,82 @@
+name: Feature request
+description: Suggest an improvement to reading, playback, accessibility, or the interface.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. Please describe the problem first, then the solution.
+        Check the existing issues to avoid duplicates.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is difficult or missing today? Who does it affect?
+      placeholder: On a phone, I cannot quickly jump between chapters in a long PDF.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the behavior you would like, including where it belongs in the interface.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Any workarounds or other approaches you have tried.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where should this apply?
+      options:
+        - Web app (browser)
+        - Android app (Capacitor)
+        - Both
+        - Local Kokoro server
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - PDF rendering and navigation
+        - Text and formatted document reading
+        - Playback and highlighting
+        - Speech engines and voices
+        - Accessibility
+        - History and local storage
+        - Interface and theming
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Mockups, examples, or constraints. Do not include personal data or copyrighted documents.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmations
+      options:
+        - label: I searched existing issues and did not find a duplicate.
+          required: true
+        - label: This request can work without uploading documents or pasted text to a server.
+          required: true

@@ -1,4 +1,4 @@
-export type TtsEngine = 'browser' | 'kokoro';
+export type TtsEngine = 'browser' | 'kokoro' | 'device';
 
 export interface TextSegment {
   id: string;          // UUID
@@ -22,6 +22,12 @@ export interface AudioState {
   selectedVoice: string | null; // For browser TTS
   file: File | null;
   documentTitle: string | null;
+  // True once every page has been text-extracted (or OCR'd).
+  segmentsComplete: boolean;
+  // When set, playback stops after this sentence instead of continuing.
+  stopAtSegmentIndex: number | null;
+  // Playback reached the last loaded sentence while pages are still loading.
+  waitingForMore: boolean;
 
   // Universal playback rate (0.75x to 2x)
   playbackSpeed: number;
@@ -31,6 +37,13 @@ export interface AudioState {
   currentPage: number;
   totalPages: number;
   isFitToWidth: boolean;
+
+  // Sentence picked by selecting text in the document (null when no selection)
+  selectionSegmentIndex: number | null;
+  setSelectionSegmentIndex: (index: number | null) => void;
+  // Real-time word being spoken inside currentSegmentIndex (browser/native TTS).
+  spokenWordRange: { start: number; end: number } | null;
+  setSpokenWordRange: (range: { start: number; end: number } | null) => void;
 
   // TTS engine
   ttsEngine: TtsEngine;
@@ -53,6 +66,10 @@ export interface AudioState {
   decreaseFontSize: () => void;
   resetFontSize: () => void;
 
+  // Speak mathematical notation as words (x² -> "x squared").
+  mathSpeech: boolean;
+  setMathSpeech: (enabled: boolean) => void;
+
   // Actions
   setFile: (file: File | null) => void;
   setDocumentTitle: (title: string | null) => void;
@@ -66,9 +83,15 @@ export interface AudioState {
   setKokoroServerUrl: (url: string) => void;
   setSelectedVoice: (voiceURI: string) => void;
   loadSegments: (segments: TextSegment[]) => void;
+  appendSegments: (segments: TextSegment[]) => void;
+  replaceSegmentsPreservingCurrent: (segments: TextSegment[]) => void;
   updateSegmentsWithoutReset: (segments: TextSegment[]) => void;
-  playSegment: (index: number) => Promise<void>;
+  setSegmentsComplete: (complete: boolean) => void;
+  applyScale: (scale: number) => void;
+  playSegment: (index: number, options?: { stopAfter?: boolean }) => Promise<void>;
   prefetchSegment: (index: number) => Promise<void>;
+  cacheAudioBlob: (hash: string, blob: Blob) => void;
+  seekToSegment: (index: number, autoplay: boolean) => void;
 
   // Controls
   play: () => void;

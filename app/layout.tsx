@@ -22,6 +22,8 @@ const jetbrainsMono = JetBrains_Mono({
   display: "swap",
 });
 
+const basePath = process.env.NEXT_PUBLIC_BASE_PATH || '';
+
 export const viewport: Viewport = {
   themeColor: [
     { media: "(prefers-color-scheme: light)", color: "#0d9488" },
@@ -187,8 +189,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning className="scroll-smooth text-[16px] overflow-x-hidden max-w-full">
-      {/* Brand tools launcher (live from personal-brand-theme; tools.json updates apply automatically) */}
-      <link rel="stylesheet" href="https://imranpollob.github.io/personal-brand-theme/launcher.css" precedence="default" />
+      {/* Brand tools launcher, vendored locally so it opens this app's local
+          route instead of the public GitHub Pages deployment. */}
+      <link rel="stylesheet" href={`${basePath}/brand/launcher.css`} precedence="default" />
       <body
         suppressHydrationWarning
         className={`${outfit.variable} ${plusJakarta.variable} ${jetbrainsMono.variable} antialiased overflow-x-hidden max-w-full min-h-screen pt-16 leading-[1.6] bg-background text-foreground font-sans transition-colors duration-[250ms] ease-linear`}

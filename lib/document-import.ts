@@ -1,7 +1,3 @@
-import mammoth from 'mammoth';
-import MarkdownIt from 'markdown-it';
-
-const markdown = new MarkdownIt({ html: false, linkify: true, breaks: false });
 const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 
 export interface ImportedDocument {
@@ -9,8 +5,12 @@ export interface ImportedDocument {
   html: string | null;
 }
 
-function markdownToText(source: string): string {
-  const rendered = new DOMParser().parseFromString(markdown.render(source), 'text/html');
+async function markdownToText(source: string): Promise<{ text: string; html: string }> {
+  // Loaded on demand so PDF-only readers never download the Markdown parser.
+  const MarkdownIt = (await import('markdown-it')).default;
+  const markdown = new MarkdownIt({ html: false, linkify: true, breaks: false });
+  const html = markdown.render(source);
+  const rendered = new DOMParser().parseFromString(html, 'text/html');
   const blockTags = new Set(['BLOCKQUOTE', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'LI', 'OL', 'P', 'PRE', 'TABLE', 'TD', 'TH', 'TR', 'UL']);
   let text = '';
 
@@ -38,7 +38,10 @@ function markdownToText(source: string): string {
   };
 
   rendered.body.childNodes.forEach(visit);
-  return text.replace(/\u00a0/g, ' ').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+  return {
+    text: text.replace(/\u00a0/g, ' ').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim(),
+    html,
+  };
 }
 
 export async function readDocumentFile(file: File): Promise<ImportedDocument> {
@@ -50,13 +53,14 @@ export async function readDocumentFile(file: File): Promise<ImportedDocument> {
 
   if (extension === 'md' || extension === 'markdown' || (!extension && file.type === 'text/markdown')) {
     const source = await file.text();
-    return {
-      text: markdownToText(source),
-      html: markdown.render(source),
-    };
+    const { text, html } = await markdownToText(source);
+    return { text, html };
   }
 
   if (extension === 'docx' || (!extension && file.type === DOCX_MIME)) {
+    // Mammoth is a sizeable dependency; keep it out of the initial PDF-only
+    // bundle and load it the first time a Word file is opened.
+    const mammoth = (await import('mammoth')).default;
     const arrayBuffer = await file.arrayBuffer();
     const [htmlResult, textResult] = await Promise.all([
       mammoth.convertToHtml({ arrayBuffer }),

@@ -4,6 +4,7 @@ import React, { useEffect, useState, useMemo } from 'react';
 import Image from 'next/image';
 import { useAudioStore } from '../store/use-audio-store';
 import { cn } from '../lib/cn';
+import { buildWordPrefix } from '../lib/text-metrics';
 import {
   ArrowLeftIcon,
   ZoomInIcon,
@@ -13,6 +14,8 @@ import {
   MoonIcon,
   ClockIcon,
 } from './Icons';
+
+const basePath = process.env.NEXT_PUBLIC_BASE_PATH || '';
 
 export default function Header() {
   const file = useAudioStore((s) => s.file);
@@ -40,7 +43,12 @@ export default function Header() {
   // Initialize theme
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    const saved = window.localStorage.getItem('theme');
+    let saved: string | null = null;
+    try {
+      saved = window.localStorage.getItem('theme');
+    } catch {
+      saved = null;
+    }
     const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
     const initial = saved === 'dark' || (!saved && prefersDark) ? 'dark' : 'light';
     document.documentElement.setAttribute('data-theme', initial);
@@ -49,13 +57,16 @@ export default function Header() {
     });
   }, []);
 
-  // Load the brand launcher only after hydration; it replaces [data-brand-launcher] in the DOM.
+  // Load the local brand launcher only after hydration; it replaces
+  // [data-brand-launcher] in the DOM. The local tools.json points the reader
+  // tile at this deployment instead of the public GitHub Pages copy.
   useEffect(() => {
-    const src = 'https://imranpollob.github.io/personal-brand-theme/launcher.js';
+    const src = `${basePath}/brand/launcher.js`;
     if (document.querySelector(`script[src="${src}"]`)) return;
     const script = document.createElement('script');
     script.src = src;
     script.async = true;
+    script.dataset.tools = `${basePath}/tools.json`;
     document.body.append(script);
   }, []);
 
@@ -63,7 +74,11 @@ export default function Header() {
     const next = theme === 'dark' ? 'light' : 'dark';
     setTheme(next);
     if (typeof window !== 'undefined') {
-      window.localStorage.setItem('theme', next);
+      try {
+        window.localStorage.setItem('theme', next);
+      } catch {
+        // Storage is optional.
+      }
       document.documentElement.setAttribute('data-theme', next);
     }
   };
@@ -75,46 +90,34 @@ export default function Header() {
     loadSegments([]);
   };
 
-  // Estimated reading time listened and total (150 words/min speech rate adjusted for playback speed)
+  // Word counts are precomputed as a prefix sum when segments change, so
+  // playback updates only do O(1) work instead of rescanning a 10k-segment book
+  // on every sentence.
+  const wordStats = useMemo(() => buildWordPrefix(segments), [segments]);
+
   const timeMetrics = useMemo(() => {
     if (!segments.length) return null;
 
     const wordsPerMinute = 150 * playbackSpeed;
 
     const formatTime = (words: number) => {
-      const minutes = words / wordsPerMinute;
       if (words === 0) return '0m';
+      const minutes = words / wordsPerMinute;
       if (minutes < 1) return '<1m';
-      const roundMins = Math.round(minutes);
-      return `${roundMins}m`;
+      return `${Math.round(minutes)}m`;
     };
 
-    // Words listened up to current segment
-    const listenedSegments = segments.slice(0, currentSegmentIndex);
-    const listenedWords = listenedSegments.reduce(
-      (acc, seg) => acc + (seg.text.trim().split(/\s+/).filter(Boolean).length || 0),
-      0
-    );
-
-    // Total words in entire document
-    const totalWords = segments.reduce(
-      (acc, seg) => acc + (seg.text.trim().split(/\s+/).filter(Boolean).length || 0),
-      0
-    );
-
-    // Remaining words
-    const remainingSegments = segments.slice(currentSegmentIndex);
-    const remainingWords = remainingSegments.reduce(
-      (acc, seg) => acc + (seg.text.trim().split(/\s+/).filter(Boolean).length || 0),
-      0
-    );
+    const index = Math.min(Math.max(0, currentSegmentIndex), segments.length);
+    const listenedWords = wordStats.prefix[index];
+    const totalWords = wordStats.total;
+    const remainingWords = Math.max(0, totalWords - listenedWords);
 
     return {
       listened: formatTime(listenedWords),
       total: formatTime(totalWords),
       remaining: formatTime(remainingWords),
     };
-  }, [segments, currentSegmentIndex, playbackSpeed]);
+  }, [segments.length, currentSegmentIndex, playbackSpeed, wordStats]);
 
   return (
     <>
@@ -122,13 +125,13 @@ export default function Header() {
         className="fixed top-0 left-0 right-0 h-16 z-[1000] bg-navbar/95 backdrop-blur-md border-b border-navbar-border shadow-xs transition-[background-color,border-color] duration-200"
         role="banner"
       >
-        <div className="w-full h-full flex items-center justify-between gap-3 px-4 sm:px-6">
+        <div className="flex h-full w-full items-center justify-between gap-2 px-3 sm:gap-3 sm:px-6">
           {/* Brand & Document identification */}
-          <div className="flex items-center gap-3 min-w-0">
+          <div className="flex min-w-0 items-center gap-2 sm:gap-3">
             <button
               type="button"
               onClick={handleGoHome}
-              className="flex items-center gap-2.5 text-foreground cursor-pointer shrink-0 border-0 bg-transparent p-0 group"
+              className="group flex shrink-0 items-center gap-2.5 border-0 bg-transparent p-0 text-foreground cursor-pointer"
               title="ReadAloud — return to home"
               aria-label="ReadAloud — return to home"
             >
@@ -142,34 +145,35 @@ export default function Header() {
                   priority
                 />
               </div>
-              <span className="font-heading font-bold text-base tracking-tight text-foreground whitespace-nowrap">
+              <span className="hidden whitespace-nowrap font-heading text-base font-bold tracking-tight text-foreground sm:inline">
                 <span>ReadAloud</span>
-                
               </span>
             </button>
 
-            {/* Active Document Badge */}
+            {/* Active Document Badge. Phones show the compact Back control only;
+                the title and sentence counter return at sm and up. */}
             {hasContent && (
               <div
-                className="flex items-center gap-2 px-2.5 py-1 rounded-full bg-navbar-control border border-navbar-control-border max-w-[280px] sm:max-w-xs animate-fade-in"
+                className="flex max-w-[150px] min-w-0 items-center gap-2 rounded-full border border-navbar-control-border bg-navbar-control px-1.5 py-1 animate-fade-in sm:max-w-xs sm:px-2.5"
                 title={documentTitle || 'Active Document'}
               >
                 <button
                   type="button"
-                  className="inline-flex items-center gap-1 bg-primary-subtle text-primary border-0 rounded-full px-2 py-0.5 text-xs font-semibold cursor-pointer transition-colors hover:bg-primary hover:text-white"
+                  className="inline-flex shrink-0 items-center gap-1 rounded-full border-0 bg-primary-subtle px-1.5 py-0.5 text-xs font-semibold text-primary cursor-pointer transition-colors hover:bg-primary hover:text-white sm:px-2"
                   title="Close document and return to upload"
+                  aria-label="Close document and return to upload"
                   onClick={handleGoHome}
                 >
                   <ArrowLeftIcon size={12} />
-                  <span>Back</span>
+                  <span className="hidden sm:inline">Back</span>
                 </button>
 
-                <div className="flex items-baseline gap-1 text-xs overflow-hidden">
-                  <span className="font-semibold whitespace-nowrap truncate max-w-[100px] sm:max-w-[140px] text-foreground">
+                <div className="hidden min-w-0 items-baseline gap-1 overflow-hidden text-xs sm:flex">
+                  <span className="max-w-[100px] truncate font-semibold text-foreground sm:max-w-[140px]">
                     {documentTitle || (file ? file.name : 'Pasted Text')}
                   </span>
                   {segments.length > 0 && (
-                    <span className="text-muted font-mono whitespace-nowrap text-[11px]">
+                    <span className="hidden whitespace-nowrap font-mono text-[11px] text-muted sm:inline">
                       ({currentSegmentIndex + 1}/{segments.length})
                     </span>
                   )}
@@ -179,7 +183,7 @@ export default function Header() {
           </div>
 
           {/* Right Header Tools */}
-          <div className="header-actions flex items-center gap-2 shrink-0">
+          <div className="header-actions flex shrink-0 items-center gap-1.5 sm:gap-2">
             {/* Reading Time Metrics (Compact Listened / Total Duration) */}
             {hasContent && timeMetrics && (
               <div
@@ -279,6 +283,17 @@ export default function Header() {
                 </button>
               </div>
             ) : null}
+            {/* Local history */}
+            <button
+              type="button"
+              className="w-9 h-9 rounded-[10px] border border-navbar-control-border bg-navbar-control text-foreground hover:text-primary hover:border-primary inline-flex items-center justify-center cursor-pointer shrink-0 p-0 transition-colors duration-200"
+              aria-label="Open recent documents"
+              title="Recent documents (stored on this device)"
+              onClick={() => window.dispatchEvent(new Event('readaloud:open-history'))}
+            >
+              <ClockIcon size={17} />
+            </button>
+
             {/* Theme Toggle Button */}
             <button
               className="theme-switch w-9 h-9 rounded-[10px] border border-navbar-control-border bg-navbar-control text-foreground hover:text-primary hover:border-primary inline-flex items-center justify-center cursor-pointer shrink-0 p-0 transition-colors duration-200"

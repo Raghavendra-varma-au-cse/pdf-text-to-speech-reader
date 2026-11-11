@@ -1,0 +1,104 @@
+name: Bug report
+description: Report a reproducible problem with reading, playback, or the interface.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug. Please search existing issues first.
+
+        **Privacy:** do not attach copyrighted documents or anything containing personal
+        data. A few pages of a document you own, or a synthetic sample, is enough. Debug
+        snapshots can include file names, so review them before pasting.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: A short description of the problem.
+      placeholder: Playback stops when a new page finishes extracting.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: List the exact steps, including the document type and page count when relevant.
+      placeholder: |
+        1. Open the app with ?debug=1
+        2. Upload a 300-page text PDF
+        3. Start playback near the end of the first page
+        4. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What happened instead? Include error messages and console output if any.
+    validations:
+      required: true
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Browser and version, operating system, and device.
+      placeholder: Chrome 132 on Windows 11 / Chrome on Android 15 (Pixel 7)
+    validations:
+      required: true
+
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Where does it happen?
+      options:
+        - Web app (browser)
+        - Android app (Capacitor)
+        - Local Kokoro server
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Speech engine
+      options:
+        - Browser / native TTS
+        - Kokoro server
+        - On-device Kokoro
+        - Not applicable
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Debug output (optional)
+      description: With `?debug=1`, run `copy(window.__readaloudDebug.snapshot())` and paste it here after removing anything private.
+      render: shell
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmations
+      options:
+        - label: I searched existing issues and did not find a duplicate.
+          required: true
+        - label: I removed personal data and copyrighted document content from this report.
+          required: true

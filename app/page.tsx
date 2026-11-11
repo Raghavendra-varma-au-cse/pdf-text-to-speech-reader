@@ -1,15 +1,24 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import dynamic from 'next/dynamic';
 import { AudioEngine } from '../components/AudioEngine';
 import { TextViewer } from '../components/TextViewer';
-import { FormattedDocumentViewer } from '../components/FormattedDocumentViewer';
 import { PlayerBar } from '../components/PlayerBar';
 import { PageNavigator } from '../components/PageNavigator';
+import { DocumentHistory } from '../components/DocumentHistory';
+import { HistorySheet } from '../components/HistorySheet';
+import { DebugPanel } from '../components/DebugPanel';
 import { useAudioStore } from '../store/use-audio-store';
 import { normalizeRawText } from '../lib/text-normalizer';
 import { readDocumentFile } from '../lib/document-import';
+import { countWords } from '../lib/text-metrics';
+import {
+  loadHistoryFile,
+  saveDocumentToHistory,
+  touchHistoryEntry,
+  type DocumentHistoryMeta,
+} from '../lib/document-history';
 import { cn } from '../lib/cn';
 import {
   UploadCloudIcon,
@@ -26,6 +35,11 @@ const PdfViewer = dynamic(
   { ssr: false }
 );
 
+const FormattedDocumentViewer = dynamic(
+  () => import('../components/FormattedDocumentViewer').then((mod) => mod.FormattedDocumentViewer),
+  { ssr: false }
+);
+
 export default function Home() {
   const file = useAudioStore((state) => state.file);
   const setFile = useAudioStore((state) => state.setFile);
@@ -38,6 +52,9 @@ export default function Home() {
   const [textInput, setTextInput] = useState('');
   const [textLoaded, setTextLoaded] = useState(false);
   const [isImportingDocument, setIsImportingDocument] = useState(false);
+  const [isOpeningHistory, setIsOpeningHistory] = useState(false);
+  const [historyRefreshToken, setHistoryRefreshToken] = useState(0);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [fileError, setFileError] = useState<string | null>(null);
   const [formattedHtml, setFormattedHtml] = useState<string | null>(null);
   const [openFaqIndex, setOpenFaqIndex] = useState<number | null>(null);
@@ -63,14 +80,37 @@ export default function Home() {
     } catch { }
   }, []);
 
-  const openDocumentFile = async (selected: File) => {
+  // The header's history button works from both the home screen and the reader.
+  useEffect(() => {
+    const openHistory = () => setHistoryOpen(true);
+    window.addEventListener('readaloud:open-history', openHistory);
+    return () => window.removeEventListener('readaloud:open-history', openHistory);
+  }, []);
+
+  const openDocumentFile = async (
+    selected: File,
+    options: { fromHistory?: boolean } = {}
+  ) => {
     const extension = selected.name.split('.').pop()?.toLowerCase();
     setFileError(null);
 
     if (extension === 'pdf' || selected.type === 'application/pdf') {
       setFormattedHtml(null);
       setFile(selected);
+      setDocumentTitle(selected.name);
+      loadSegments([]);
       setTextLoaded(false);
+
+      // Store the blob locally so the same PDF can be reopened without a
+      // second upload. This runs in the background and never blocks opening.
+      if (!options.fromHistory) {
+        void saveDocumentToHistory(selected, 'pdf')
+          .then(() => setHistoryRefreshToken((value) => value + 1))
+          .catch(() =>
+            setFileError('Document opened, but it could not be saved to local history. Storage may be full.')
+          );
+      }
+
       return;
     }
 
@@ -86,10 +126,35 @@ export default function Home() {
       setDocumentTitle(selected.name);
       loadSegments(segs);
       setTextLoaded(true);
+      useAudioStore.getState().setSegmentsComplete(true);
+
+      if (!options.fromHistory) {
+        void saveDocumentToHistory(selected, 'document')
+          .then(() => setHistoryRefreshToken((value) => value + 1))
+          .catch(() =>
+            setFileError('Document opened, but it could not be saved to local history. Storage may be full.')
+          );
+      }
     } catch (error) {
       setFileError(error instanceof Error ? error.message : 'Could not read this document.');
     } finally {
       setIsImportingDocument(false);
+    }
+  };
+
+  const openHistoryDocument = async (meta: DocumentHistoryMeta) => {
+    setFileError(null);
+    setIsOpeningHistory(true);
+    try {
+      const stored = await loadHistoryFile(meta);
+      if (!stored) throw new Error('This document is no longer available in local storage.');
+      await touchHistoryEntry(meta.id);
+      await openDocumentFile(stored, { fromHistory: true });
+      setHistoryRefreshToken((value) => value + 1);
+    } catch (error) {
+      setFileError(error instanceof Error ? error.message : 'Could not open this document.');
+    } finally {
+      setIsOpeningHistory(false);
     }
   };
 
@@ -105,6 +170,7 @@ export default function Home() {
     const segs = normalizeRawText(textInput);
     setDocumentTitle('Pasted Text Document');
     loadSegments(segs);
+    useAudioStore.getState().setSegmentsComplete(true);
     setTextLoaded(true);
     setFile(null); // Clear PDF if any
   };
@@ -149,8 +215,9 @@ export default function Home() {
 
   const showEmptyState = !file && !textLoaded;
 
-  // Text statistics
-  const wordCount = textInput.trim() ? textInput.trim().split(/\s+/).length : 0;
+  // Text statistics (memoised: long pasted documents should not be re-counted
+  // on every keystroke or playback update).
+  const wordCount = useMemo(() => countWords(textInput), [textInput]);
   const estimatedReadMinutes = Math.max(
     1,
     Math.ceil(wordCount / (150 * playbackSpeed))
@@ -180,7 +247,7 @@ export default function Home() {
   ];
 
   return (
-    <main className="w-full flex flex-col items-center min-h-[calc(100vh-64px)] px-4 sm:px-6">
+    <main className="w-full flex flex-col items-center min-h-[calc(100dvh-64px)] px-4 sm:px-6">
       <div
         className={cn(
           'relative w-full flex flex-col items-center',
@@ -325,6 +392,17 @@ export default function Home() {
               <p className="mt-4 text-sm text-muted">Runs in your browser. No account needed.</p>
             </section>
 
+            {isOpeningHistory && (
+              <p role="status" className="mt-4 text-sm text-muted">Opening document from local history…</p>
+            )}
+            {fileError && (
+              <p role="alert" className="mt-4 text-sm text-error">{fileError}</p>
+            )}
+            <DocumentHistory
+              onOpen={(meta) => void openHistoryDocument(meta)}
+              refreshToken={historyRefreshToken}
+            />
+
             {/* Highlight preview */}
             <section aria-label="Synchronized highlighting preview" className="w-full mt-14 sm:mt-20">
               <div className="reader-preview relative overflow-hidden rounded-[1.75rem] border p-6 sm:p-9">
@@ -441,7 +519,7 @@ export default function Home() {
           <>
             {file ? (
               <>
-                <div className="w-full pt-4 pb-28 sm:pb-32">
+                <div className="w-full pt-4 pb-40 sm:pb-32">
                   <PdfViewer file={file} />
                 </div>
 
@@ -449,7 +527,7 @@ export default function Home() {
                 <PageNavigator />
               </>
             ) : (
-              <div className="w-full max-w-4xl mx-auto py-4 pb-28 sm:pb-32">
+              <div className="w-full max-w-4xl mx-auto py-4 pb-40 sm:pb-32">
                 <div className="flex justify-between items-center mb-4 px-2">
                   <span className="text-xs font-semibold text-muted uppercase tracking-wider">
                     Document Reader Mode
@@ -477,6 +555,19 @@ export default function Home() {
 
       {/* Floating Bottom Player Bar */}
       <PlayerBar />
+
+      {/* In-repo diagnostics (visible with ?debug=1) */}
+      <DebugPanel />
+
+      <HistorySheet
+        isOpen={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        refreshToken={historyRefreshToken}
+        onOpen={(meta) => {
+          setHistoryOpen(false);
+          void openHistoryDocument(meta);
+        }}
+      />
 
       {/* Headless Audio Playback Engine */}
       <AudioEngine />

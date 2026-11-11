@@ -3,6 +3,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAudioStore } from '../store/use-audio-store';
 import { cn } from '../lib/cn';
+import { getNativeVoices, isNativePlatform } from '../lib/native-tts';
+import { KokoroDeviceDownload } from './KokoroDeviceDownload';
 import {
   VoiceIcon,
   HeadphonesIcon,
@@ -27,12 +29,20 @@ export const VoiceSheet: React.FC<VoiceSheetProps> = ({ isOpen, onClose, trigger
   const kokoroVoice = useAudioStore((s) => s.kokoroVoice);
   const setKokoroVoice = useAudioStore((s) => s.setKokoroVoice);
   const kokoroServerUrl = useAudioStore((s) => s.kokoroServerUrl);
+  const setKokoroServerUrl = useAudioStore((s) => s.setKokoroServerUrl);
 
-  const [activeTab, setActiveTab] = useState<'browser' | 'kokoro'>(ttsEngine);
+  const [activeTab, setActiveTab] = useState<'browser' | 'kokoro'>(
+    ttsEngine === 'browser' ? 'browser' : 'kokoro'
+  );
   const [searchQuery, setSearchQuery] = useState('');
   const [browserVoices, setBrowserVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [kokoroVoices, setKokoroVoices] = useState<string[]>([]);
+  const [kokoroVoicesUrl, setKokoroVoicesUrl] = useState('');
+  const [serverUrlDraft, setServerUrlDraft] = useState(kokoroServerUrl);
   const [isLoadingKokoro, setIsLoadingKokoro] = useState(false);
+  const [kokoroMessage, setKokoroMessage] = useState<string | null>(null);
+  const [retryTick, setRetryTick] = useState(0);
+  const [isNative, setIsNative] = useState(false);
   const sheetRef = useRef<HTMLDivElement>(null);
   const searchInputRef = useRef<HTMLInputElement>(null);
 
@@ -40,16 +50,37 @@ export const VoiceSheet: React.FC<VoiceSheetProps> = ({ isOpen, onClose, trigger
   useEffect(() => {
     if (isOpen) {
       queueMicrotask(() => {
-        setActiveTab(ttsEngine);
+        setActiveTab(ttsEngine === 'browser' ? 'browser' : 'kokoro');
         setSearchQuery('');
+        setServerUrlDraft(kokoroServerUrl);
         searchInputRef.current?.focus();
       });
     }
-  }, [isOpen, ttsEngine]);
+  }, [isOpen, ttsEngine, kokoroServerUrl]);
 
-  // Load browser voices
+  // Load browser voices (or the OS voices inside the Android/iOS app).
   useEffect(() => {
-    const loadVoices = () => {
+    const native = isNativePlatform();
+    queueMicrotask(() => setIsNative(native));
+
+    const loadVoices = async () => {
+      if (native) {
+        const deviceVoices = await getNativeVoices();
+        const mapped = deviceVoices.map((voice) => ({
+          name: voice.name,
+          lang: voice.lang,
+          voiceURI: voice.voiceURI,
+          default: voice.default,
+          localService: voice.localService,
+        })) as SpeechSynthesisVoice[];
+        setBrowserVoices(mapped);
+        if (!selectedVoice && mapped.length > 0) {
+          const en = mapped.find((voice) => voice.lang.startsWith('en')) || mapped[0];
+          if (en) setSelectedVoice(en.voiceURI);
+        }
+        return;
+      }
+
       if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
       const vs = window.speechSynthesis.getVoices();
       setBrowserVoices(vs);
@@ -58,41 +89,79 @@ export const VoiceSheet: React.FC<VoiceSheetProps> = ({ isOpen, onClose, trigger
         if (en) setSelectedVoice(en.voiceURI);
       }
     };
-    loadVoices();
-    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      window.speechSynthesis.onvoiceschanged = loadVoices;
+
+    void loadVoices();
+    if (!native && typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      window.speechSynthesis.onvoiceschanged = () => void loadVoices();
     }
     return () => {
-      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      if (!native && typeof window !== 'undefined' && 'speechSynthesis' in window) {
         window.speechSynthesis.onvoiceschanged = null;
       }
     };
   }, [selectedVoice, setSelectedVoice]);
 
-  // Fetch Kokoro voices when open
+  // Fetch Kokoro voices when open. Cache per server URL and time out quickly so
+  // an offline server never leaves the sheet spinning forever.
   useEffect(() => {
     if (!isOpen) return;
+    if (kokoroVoices.length > 0 && kokoroVoicesUrl === kokoroServerUrl) return;
+
     let active = true;
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 6000);
     queueMicrotask(() => {
-      if (active) setIsLoadingKokoro(true);
+      if (active) {
+        setIsLoadingKokoro(true);
+        setKokoroMessage(null);
+      }
     });
 
-    fetch(`${kokoroServerUrl}/voices`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (active) setKokoroVoices(data.voices ?? []);
+    fetch(`${kokoroServerUrl}/voices`, { signal: controller.signal })
+      .then(async (r) => {
+        if (r.status === 503) {
+          const detail = await r.json().catch(() => null);
+          const message =
+            typeof detail?.detail === 'string' ? detail.detail : 'Kokoro model is loading…';
+          throw Object.assign(new Error(message), { retry: true });
+        }
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
       })
-      .catch(() => {
-        if (active) setKokoroVoices([]);
+      .then((data) => {
+        if (active) {
+          setKokoroVoices(Array.isArray(data.voices) ? data.voices : []);
+          setKokoroVoicesUrl(kokoroServerUrl);
+          setKokoroMessage(null);
+          // Warm the model in the background so the first sentence is fast.
+          void fetch(`${kokoroServerUrl}/warmup`, { method: 'POST' }).catch(() => {});
+        }
+      })
+      .catch((error) => {
+        if (active) {
+          setKokoroVoices([]);
+          setKokoroVoicesUrl(kokoroServerUrl);
+          if ((error as { retry?: boolean }).retry) {
+            setKokoroMessage('Kokoro is loading the model. This can take a minute on first run…');
+            window.setTimeout(() => {
+              if (active) setRetryTick((value) => value + 1);
+            }, 5000);
+          } else {
+            setKokoroMessage(null);
+          }
+        }
       })
       .finally(() => {
+        window.clearTimeout(timeout);
         if (active) setIsLoadingKokoro(false);
       });
 
     return () => {
       active = false;
+      window.clearTimeout(timeout);
+      controller.abort();
     };
-  }, [isOpen, kokoroServerUrl]);
+  }, [isOpen, kokoroServerUrl, kokoroVoices.length, kokoroVoicesUrl, retryTick]);
 
   // Close on outside click
   useEffect(() => {
@@ -147,16 +216,16 @@ export const VoiceSheet: React.FC<VoiceSheetProps> = ({ isOpen, onClose, trigger
       <div
         ref={sheetRef}
         className={cn(
-          'z-[1200] bg-surface border border-border shadow-2xl flex flex-col',
-          'max-md:fixed max-md:bottom-0 max-md:left-0 max-md:right-0 max-md:max-h-[85vh] max-md:rounded-t-3xl max-md:p-5 max-md:safe-bottom max-md:animate-slide-up',
-          'md:absolute md:bottom-[calc(100%+12px)] md:right-0 md:w-[380px] md:max-h-[520px] md:rounded-2xl md:p-4 md:animate-fade-in-fast'
+          'z-[1200] bg-surface border border-border shadow-2xl flex min-h-0 flex-col',
+          'max-md:fixed max-md:bottom-0 max-md:left-0 max-md:right-0 max-md:max-h-[85dvh] max-md:rounded-t-3xl max-md:p-5 max-md:pb-[max(1.25rem,env(safe-area-inset-bottom))] max-md:animate-slide-up',
+          'md:absolute md:bottom-[calc(100%+12px)] md:right-0 md:w-[380px] md:max-h-[min(520px,calc(100dvh-8rem))] md:rounded-2xl md:p-4 md:animate-fade-in-fast'
         )}
         role="dialog"
         aria-modal="true"
         aria-label="Select voice"
       >
         {/* Header with drag indicator & close button */}
-        <div className="flex items-center justify-between pb-3 border-b border-border/60">
+        <div className="flex shrink-0 items-center justify-between border-b border-border/60 pb-3">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 rounded-full bg-primary-subtle text-primary flex items-center justify-center">
               <HeadphonesIcon size={18} />
@@ -179,11 +248,11 @@ export const VoiceSheet: React.FC<VoiceSheetProps> = ({ isOpen, onClose, trigger
         </div>
 
         {/* Tab switch */}
-        <div className="flex gap-1.5 p-1 rounded-xl bg-navbar-control border border-navbar-control-border my-3">
+        <div className="my-3 flex shrink-0 gap-1.5 rounded-xl border border-navbar-control-border bg-navbar-control p-1">
           <button
             type="button"
             className={cn(
-              'flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg text-xs font-semibold border-0 cursor-pointer transition-all duration-150',
+              'flex min-h-[2.5rem] min-w-0 flex-1 items-center justify-center gap-1.5 px-2 py-2 text-xs font-semibold border-0 rounded-lg cursor-pointer transition-all duration-150 sm:px-3',
               activeTab === 'browser'
                 ? 'bg-surface text-primary shadow-xs font-bold'
                 : 'bg-transparent text-muted hover:text-foreground'
@@ -194,13 +263,15 @@ export const VoiceSheet: React.FC<VoiceSheetProps> = ({ isOpen, onClose, trigger
             }}
           >
             <VoiceIcon size={14} />
-            <span>Browser Voices ({browserVoices.length})</span>
+            <span className="truncate">
+              {isNative ? 'Device Voices' : 'Browser Voices'} ({browserVoices.length})
+            </span>
           </button>
 
           <button
             type="button"
             className={cn(
-              'flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg text-xs font-semibold border-0 cursor-pointer transition-all duration-150',
+              'flex min-h-[2.5rem] min-w-0 flex-1 items-center justify-center gap-1.5 px-2 py-2 text-xs font-semibold border-0 rounded-lg cursor-pointer transition-all duration-150 sm:px-3',
               activeTab === 'kokoro'
                 ? 'bg-surface text-primary shadow-xs font-bold'
                 : 'bg-transparent text-muted hover:text-foreground'
@@ -211,15 +282,75 @@ export const VoiceSheet: React.FC<VoiceSheetProps> = ({ isOpen, onClose, trigger
             }}
           >
             <BotIcon size={14} />
-            <span>Kokoro Neural</span>
-            <span className="bg-primary/20 text-primary text-[10px] px-1.5 py-0.2 rounded-full font-bold">
+            <span className="truncate">Kokoro Neural</span>
+            <span className="shrink-0 rounded-full bg-primary/20 px-1.5 py-0.5 text-[10px] font-bold text-primary">
               HD
             </span>
           </button>
         </div>
 
+        {/* Optional on-device Kokoro model */}
+        {activeTab === 'kokoro' && (
+          <details className="mb-2.5 shrink-0 rounded-xl border border-border bg-background/60">
+            <summary className="cursor-pointer select-none px-3 py-2 text-xs font-semibold text-foreground">
+              On-device Kokoro (offline, optional)
+            </summary>
+            <div className="border-t border-border/60 p-2">
+              <KokoroDeviceDownload
+                onReady={() => {
+                  setTtsEngine('device');
+                  setActiveTab('kokoro');
+                  onClose();
+                }}
+              />
+            </div>
+          </details>
+        )}
+
         {/* Search input */}
-        <div className="relative mb-2.5">
+        {activeTab === 'kokoro' && (
+          <div className="mb-2.5 shrink-0">
+            <div className="flex gap-1.5">
+              <label htmlFor="kokoro-server-url" className="sr-only">Kokoro server address</label>
+              <input
+                id="kokoro-server-url"
+                type="url"
+                inputMode="url"
+                value={serverUrlDraft}
+                onChange={(event) => setServerUrlDraft(event.target.value)}
+                onBlur={() => {
+                  const next = serverUrlDraft.trim().replace(/\/+$/, '') || 'http://localhost:8880';
+                  setServerUrlDraft(next);
+                  if (next !== kokoroServerUrl) {
+                    setKokoroVoices([]);
+                    setKokoroVoicesUrl('');
+                    setKokoroServerUrl(next);
+                  }
+                }}
+                placeholder="http://localhost:8880"
+                className="min-w-0 flex-1 rounded-lg border border-border bg-background px-2.5 py-2 text-xs font-mono text-foreground outline-none focus:border-primary focus:ring-2 focus:ring-primary/20"
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  const next = serverUrlDraft.trim().replace(/\/+$/, '') || 'http://localhost:8880';
+                  setServerUrlDraft(next);
+                  setKokoroVoices([]);
+                  setKokoroVoicesUrl('');
+                  setKokoroServerUrl(next);
+                }}
+                className="shrink-0 rounded-lg bg-navbar-control border border-navbar-control-border px-2.5 py-2 text-xs font-semibold text-foreground hover:border-primary hover:text-primary"
+              >
+                Connect
+              </button>
+            </div>
+            <p className="mt-1 text-[11px] leading-snug text-muted">
+              On a phone, use your computer&apos;s LAN address, e.g. http://192.168.1.20:8880
+            </p>
+          </div>
+        )}
+
+        <div className="relative mb-2.5 shrink-0">
           <SearchIcon
             size={16}
             className="absolute left-3 top-1/2 -translate-y-1/2 text-muted pointer-events-none"
@@ -246,7 +377,7 @@ export const VoiceSheet: React.FC<VoiceSheetProps> = ({ isOpen, onClose, trigger
         </div>
 
         {/* Voice list */}
-        <div className="flex-1 overflow-y-auto max-h-[300px] flex flex-col gap-1 pr-1 [scrollbar-width:thin]">
+        <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-y-auto overscroll-contain pr-1 pb-1 [scrollbar-width:thin]">
           {activeTab === 'browser' ? (
             filteredBrowser.length > 0 ? (
               filteredBrowser.map((v) => {
@@ -297,10 +428,11 @@ export const VoiceSheet: React.FC<VoiceSheetProps> = ({ isOpen, onClose, trigger
                   <BotIcon size={20} />
                 </div>
                 <div className="text-sm font-semibold text-foreground">
-                  Kokoro Neural Server Offline
+                  {kokoroMessage ? 'Kokoro is starting' : 'Kokoro Neural Server Offline'}
                 </div>
                 <p className="text-xs text-muted leading-relaxed max-w-[280px]">
-                  Local Python server is not currently running. Run in terminal:
+                  {kokoroMessage ??
+                    'Local Python server is not currently running. Run in terminal:'}
                 </p>
                 <code className="text-xs bg-background px-2.5 py-1.5 rounded border border-border font-mono text-primary select-all">
                   uv run python main.py

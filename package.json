@@ -8,7 +8,7 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "build:gh": "NEXT_PUBLIC_BASE_PATH=/pdf-text-to-speech-reader next build",
+    "build:gh": "cross-env NEXT_PUBLIC_BASE_PATH=/pdf-text-to-speech-reader next build",
     "start": "next start",
     "lint": "eslint",
     "test": "node tests/run.mjs",
@@ -45,6 +45,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "baseline-browser-mapping": "^2.11.22",
+    "cross-env": "^10.1.0",
     "eslint": "^9",
     "eslint-config-next": "16.3.5",
     "tailwindcss": "^4",

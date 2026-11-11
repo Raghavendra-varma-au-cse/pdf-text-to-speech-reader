@@ -37,6 +37,11 @@ export const AudioEngine = () => {
       };
       audio.onerror = (e) => {
         console.error('Audio playback error', e);
+        const state = useAudioStore.getState();
+        if (state.playbackStatus === 'playing') {
+          // A corrupt cached blob should not leave the UI stuck in "playing".
+          state.setPlaybackStatus('idle');
+        }
       };
       audioRef.current = audio;
     }

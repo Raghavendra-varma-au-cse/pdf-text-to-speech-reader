@@ -370,6 +370,8 @@ export const useAudioStore = create<AudioStore>((set, get) => ({
       currentSegmentIndex: 0,
       stopAtSegmentIndex: null,
       waitingForMore: false,
+      selectionSegmentIndex: null,
+      spokenWordRange: null,
     });
   },
 

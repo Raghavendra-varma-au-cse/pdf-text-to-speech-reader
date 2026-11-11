@@ -18,6 +18,10 @@ concurrency:
 
 jobs:
   build:
+    # The deploy workflow belongs to the upstream repository. Forks do not have
+    # Pages enabled and would fail at configure-pages, so skip it there. Forks
+    # still get the CI workflow and the manual Android APK workflow.
+    if: github.repository == 'imranpollob/pdf-text-to-speech-reader'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -26,7 +30,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: "npm"
 
       - name: Install dependencies
@@ -39,6 +43,8 @@ jobs:
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
+        with:
+          enablement: true
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
@@ -46,6 +52,7 @@ jobs:
           path: "./out"
 
   deploy:
+    if: github.repository == 'imranpollob/pdf-text-to-speech-reader'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
